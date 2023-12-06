@@ -5,9 +5,9 @@ using Microsoft.AspNetCore.Mvc;
 using MySqlConnector;
 using FluentValidation;
 using Elsa;
-using ElsaGuides.ContentApproval.Web;
 using Elsa.Services;
 using Elsa.Models;
+using ElsaRegister.Workflows;
 
 var builder = WebApplication.CreateBuilder(args);
 var config = builder.Configuration;
@@ -29,7 +29,8 @@ var elsaService = builder.Services.AddElsa(elsa => elsa
     .AddHttpActivities(elsaSection.GetSection("Server").Bind)
     .AddEmailActivities(elsaSection.GetSection("Smtp").Bind)
     .AddQuartzTemporalActivities()
-    .AddWorkflow<RegisterWorkflow>()
+    .AddWorkflow<RegisterAdministrationWorkflow>()
+    .AddWorkflow<RegisterResponseWorkflow>()
 ).BuildServiceProvider();
 var workflowRunner = elsaService.GetRequiredService<IBuildsAndStartsWorkflow>();
 
@@ -52,20 +53,44 @@ app.MapPost("/register", async (IUserRepository repository, IMapper mapper, IVal
     var validation = await validator.ValidateAsync(request);
     if (!validation.IsValid)
         return Results.BadRequest(validation.Errors.FirstOrDefault()!.ErrorMessage);
-    
+
     var user = mapper.Map<User>(request);
     if (await repository.GetUser(user.Email) is null)
     {
         await repository.InsertUser(user);
-        
-        var worflowInput = new  WorkflowInput(user);
-        var result = await workflowRunner.BuildAndStartWorkflowAsync<RegisterWorkflow>("main", worflowInput);
-        if(!result.Executed)
-            throw new Exception("Not executed");
+
+        var worflowInput = new WorkflowInput(user);
+        await workflowRunner.BuildAndStartWorkflowAsync<RegisterAdministrationWorkflow>("main", worflowInput);
     }
     else
         return Results.BadRequest("User has been already registered");
     return Results.Created();
+});
+
+
+// TODO must recieve a token instead of an implicit email
+bool adminAuthorized = false;
+app.MapGet("/register/{encoding}", async (IUserRepository repo, string encoding) =>
+{
+    // var email = encoding.Substring(0, encoding.Length - 1);
+    var email = encoding[..^1];
+    // var status = (encoding[encoding.Length - 1] - 48) == 1;
+    var status = (encoding[^1] - 48) == 1;
+
+    if (status && adminAuthorized)
+        encoding = "accepted";
+    else if (status)
+    {
+        encoding = "wait";
+        adminAuthorized = true;
+    }
+    else
+        encoding = "rejected";
+
+    var worflowInput = new WorkflowInput(new { Email = email, Encoding = encoding });
+    await workflowRunner.BuildAndStartWorkflowAsync<RegisterResponseWorkflow>("main", worflowInput);
+
+    return Results.Ok(encoding);
 });
 
 app.Run();
