@@ -1,0 +1,6 @@
+@ElsaRegister_HostAddress = http://localhost:5043
+
+GET {{ElsaRegister_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
